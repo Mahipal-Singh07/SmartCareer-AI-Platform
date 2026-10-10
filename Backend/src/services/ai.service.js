@@ -62,13 +62,13 @@ IMPORTANT:
 4. Answers should be specific, technically accurate, and useful for interview preparation.
 5. Follow the JSON schema exactly.
 
-RESUME:
+ Resume:
 ${resume}
 
-SELF-DESCRIPTION:
+Self Description:
 ${selfDescription}
 
-JOB DESCRIPTION:
+Job Description:
 ${jobDescription}
 `
 
@@ -81,7 +81,7 @@ ${jobDescription}
         }
     })
 
-   console.log(JSON.parse(response.text))
+   return JSON.parse(response.text)
 
 
 }
