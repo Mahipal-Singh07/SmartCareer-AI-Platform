@@ -42,7 +42,7 @@ self-description, and the job description.
 
 Return ONLY a valid JSON object matching the provided schema.
 
-Requirements:
+Requirements Needed:
 - matchScore: integer between 0 and 100.
 - technicalQuestions: generate 10 relevant technical interview questions.
   Each must include question, intention, and a detailed sample answer.
