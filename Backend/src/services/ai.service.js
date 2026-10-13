@@ -1,51 +1,67 @@
 
 const { GoogleGenAI, Type } = require("@google/genai");
-const { z } = require("zod");
+const puppeteer = require("puppeteer");
 
 const ai = new GoogleGenAI({
     apiKey: process.env.GOOGLE_GENAI_API_KEY,
 });
 
-// Zod schema for validating Gemini's response
-const interviewReportSchema = z.object({
-    matchScore: z.number().min(0).max(100),
+// Primary model and fallback model
+const MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+];
 
-    technicalQuestions: z.array(
-        z.object({
-            question: z.string(),
-            intention: z.string(),
-            answer: z.string(),
-        })
-    ),
+const wait = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
 
-    behavioralQuestions: z.array(
-        z.object({
-            question: z.string(),
-            intention: z.string(),
-            answer: z.string(),
-        })
-    ),
+function isTemporaryError(error) {
+    const message = error?.message || "";
 
-    skillGaps: z.array(
-        z.object({
-            skill: z.string(),
-            severity: z.enum(["low", "medium", "high"]),
-        })
-    ),
+    return (
+        message.includes("503") ||
+        message.includes("UNAVAILABLE") ||
+        message.toLowerCase().includes("high demand") ||
+        error?.status === 503
+    );
+}
 
-    preparationPlan: z.array(
-        z.object({
-            day: z.number(),
-            focus: z.string(),
-            tasks: z.array(z.string()),
-        })
-    ),
+// Retry temporarily unavailable models and try the fallback model.
+async function generateWithRetry(request) {
+    let lastError;
 
-    title: z.string(),
-});
+    for (const model of MODELS) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                console.log(`Trying Gemini model: ${model}`);
 
-// Gemini's native structured-output schema
-const responseSchema = {
+                return await ai.models.generateContent({
+                    ...request,
+                    model,
+                });
+            } catch (error) {
+                lastError = error;
+
+                if (!isTemporaryError(error)) {
+                    throw error;
+                }
+
+                console.error(
+                    `${model} unavailable. Attempt ${attempt + 1}/3`
+                );
+
+                if (attempt < 2) {
+                    await wait(1000 * 2 ** attempt);
+                }
+            }
+        }
+    }
+
+    throw lastError;
+}
+
+// Interview report response schema
+const interviewReportSchema = {
     type: Type.OBJECT,
     properties: {
         title: {
@@ -118,60 +134,189 @@ const responseSchema = {
     ],
 };
 
+// Generate interview report
 async function generateInterviewReport({
     resume,
     selfDescription,
     jobDescription,
 }) {
     const prompt = `
-Generate an interview preparation report using the information below.
+You are an expert technical interviewer and career advisor.
 
-JOB DESCRIPTION:
-${jobDescription || "Not provided"}
+Generate a detailed interview preparation report.
 
 RESUME:
-${resume || "Not provided"}
+${resume}
 
-CANDIDATE SELF-DESCRIPTION:
-${selfDescription || "Not provided"}
+SELF-DESCRIPTION:
+${selfDescription}
 
-Requirements:
-1. Extract the actual job title from the job description.
-2. Calculate matchScore between 0 and 100.
-3. Generate exactly 10 technical questions.
-4. Generate exactly 5 behavioral questions.
-5. Generate 3 to 5 skill gaps.
-6. Generate a preparation plan covering days 1 through 7.
-7. Every technical and behavioral question must contain:
-   question, intention, and answer.
-8. Every skill gap must contain skill and severity.
-9. Severity must be low, medium, or high.
-10. Every preparation-plan item must contain day, focus, and tasks.
-11. Make the answers useful for interview preparation.
-12. Use the candidate's actual experience and the job requirements.
-13. Do not return null values or omit required fields.
+JOB DESCRIPTION:
+${jobDescription}
+
+Instructions:
+1. Extract the job title from the job description.
+2. Give a realistic match score between 0 and 100.
+3. Generate 8 to 10 technical interview questions.
+4. Generate 5 behavioral interview questions.
+5. Every question must contain question, intention, and answer.
+6. Identify 3 to 5 skill gaps with severity low, medium, or high.
+7. Generate a 7-day preparation plan.
+8. Every preparation day must contain numeric day, focus, and tasks.
+9. Tailor the output to the supplied resume and job description.
+10. Return objects in arrays, not plain strings.
+11. Populate all sections with meaningful information.
+12. Do not invent candidate qualifications or experience.
 `;
 
-    const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash-lite",
+    const response = await generateWithRetry({
         contents: prompt,
         config: {
             responseMimeType: "application/json",
-            responseSchema,
+            responseSchema: interviewReportSchema,
         },
     });
 
     if (!response.text) {
-        throw new Error("Gemini returned an empty response.");
+        throw new Error("Gemini returned an empty interview report.");
     }
 
-    // console.log("Gemini response:", response.text);
+    let report;
 
-    const parsedData = JSON.parse(response.text);
+    try {
+        report = JSON.parse(response.text);
+    } catch {
+        throw new Error("Gemini returned invalid JSON.");
+    }
 
-    const result = interviewReportSchema.parse(parsedData);
+    const requiredArrays = [
+        "technicalQuestions",
+        "behavioralQuestions",
+        "skillGaps",
+        "preparationPlan",
+    ];
 
-    return result;
+    if (
+        !report.title ||
+        typeof report.matchScore !== "number" ||
+        report.matchScore < 0 ||
+        report.matchScore > 100 ||
+        requiredArrays.some(
+            (field) => !Array.isArray(report[field])
+        )
+    ) {
+        throw new Error("Gemini returned an incomplete interview report.");
+    }
+
+    if (
+        report.technicalQuestions.length === 0 ||
+        report.behavioralQuestions.length === 0 ||
+        report.preparationPlan.length === 0
+    ) {
+        throw new Error(
+            "Gemini returned empty report sections. Please try again."
+        );
+    }
+
+    console.log("Interview report generated successfully.");
+
+    return report;
 }
 
-module.exports = { generateInterviewReport };
+// Convert HTML into a PDF
+async function generatePdfFromHtml(htmlContent) {
+    const browser = await puppeteer.launch();
+
+    try {
+        const page = await browser.newPage();
+
+        await page.setContent(htmlContent, {
+            waitUntil: "networkidle0",
+        });
+
+        return await page.pdf({
+            format: "A4",
+            printBackground: true,
+            margin: {
+                top: "20mm",
+                bottom: "20mm",
+                left: "15mm",
+                right: "15mm",
+            },
+        });
+    } finally {
+        await browser.close();
+    }
+}
+
+// Generate resume PDF
+async function generateResumePdf({
+    resume,
+    selfDescription,
+    jobDescription,
+}) {
+    const prompt = `
+Create a professional ATS-friendly resume tailored to the job.
+
+RESUME:
+${resume}
+
+SELF-DESCRIPTION:
+${selfDescription}
+
+JOB DESCRIPTION:
+${jobDescription}
+
+Return a JSON object with one field named "html".
+The html field must contain a complete HTML resume.
+
+Requirements:
+- Use the candidate's actual information.
+- Do not invent experience or qualifications.
+- Highlight skills relevant to the job.
+- Use a simple professional layout.
+- Make the resume suitable for an A4 PDF.
+-Give the resume of one page only and that looks real to human written and not by the ai.
+-The resume should not be so lengthy, it should ideally be 1-2 pages long when converted to PDF. Focus on quality rather than quantity and make sure to include all the relevant information that can increase the candidate's chances of getting an interview call for the given job description
+`;
+
+    const response = await generateWithRetry({
+        contents: prompt,
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    html: { type: Type.STRING },
+                },
+                required: ["html"],
+            },
+        },
+    });
+
+    if (!response.text) {
+        throw new Error("Gemini returned an empty resume response.");
+    }
+
+    let resumeData;
+
+    try {
+        resumeData = JSON.parse(response.text);
+    } catch {
+        throw new Error("Gemini returned invalid resume JSON.");
+    }
+
+    if (
+        typeof resumeData.html !== "string" ||
+        !resumeData.html.trim()
+    ) {
+        throw new Error("Gemini did not return valid resume HTML.");
+    }
+
+    return generatePdfFromHtml(resumeData.html);
+}
+
+module.exports = {
+    generateInterviewReport,
+    generateResumePdf,
+};
