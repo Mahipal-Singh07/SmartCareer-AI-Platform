@@ -1,12 +1,16 @@
-
 const { GoogleGenAI, Type } = require("@google/genai");
+const Groq = require("groq-sdk");
 const puppeteer = require("puppeteer");
 
 const ai = new GoogleGenAI({
     apiKey: process.env.GOOGLE_GENAI_API_KEY,
 });
 
-// Primary model and fallback model
+const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY || "missing-groq-api-key",
+});
+
+// Primary Gemini models
 const MODELS = [
     "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
@@ -14,6 +18,18 @@ const MODELS = [
 
 const wait = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms));
+
+function isQuotaError(error) {
+    const message = (error?.message || "").toLowerCase();
+
+    return (
+        error?.status === 429 ||
+        error?.code === 429 ||
+        message.includes("429") ||
+        message.includes("resource_exhausted") ||
+        message.includes("quota exceeded")
+    );
+}
 
 function isTemporaryError(error) {
     const message = error?.message || "";
@@ -26,7 +42,56 @@ function isTemporaryError(error) {
     );
 }
 
-// Retry temporarily unavailable models and try the fallback model.
+// Generate content using Groq when Gemini models fail
+async function generateWithGroq(prompt, responseSchema) {
+    if (!process.env.GROQ_API_KEY) {
+        throw new Error("GROQ_API_KEY is missing in .env");
+    }
+
+    console.log("Trying Groq backup model...");
+
+    const schemaInstructions = responseSchema
+        ? `\nFollow this JSON schema and its nested fields:\n${JSON.stringify(responseSchema)}`
+        : "";
+
+    const response = await groq.chat.completions.create({
+        model: "openai/gpt-oss-20b",
+        messages: [
+            {
+                role: "system",
+                content: `
+Return only one valid JSON object.
+Follow the requested fields and nested structure exactly.
+Do not wrap the JSON in Markdown.
+${schemaInstructions}
+                `,
+            },
+            {
+                role: "user",
+                content: prompt,
+            },
+        ],
+        response_format: {
+            type: "json_object",
+        },
+    });
+
+    const content = response.choices?.[0]?.message?.content;
+
+    if (!content) {
+        throw new Error("Groq returned an empty response");
+    }
+
+    // Check that the response is valid JSON
+    JSON.parse(content);
+
+    console.log("Groq response generated successfully.");
+
+    // Return the same response shape used by the Gemini SDK
+    return { text: content };
+}
+
+// Try Gemini models first, then Groq
 async function generateWithRetry(request) {
     let lastError;
 
@@ -35,19 +100,40 @@ async function generateWithRetry(request) {
             try {
                 console.log(`Trying Gemini model: ${model}`);
 
-                return await ai.models.generateContent({
+                const response = await ai.models.generateContent({
                     ...request,
                     model,
                 });
+
+                if (!response?.text) {
+                    throw new Error(
+                        `${model} returned an empty response`
+                    );
+                }
+
+                return response;
             } catch (error) {
                 lastError = error;
 
+                // Quota errors: skip retries and try the next model
+                if (isQuotaError(error)) {
+                    console.error(
+                        `Quota exhausted for ${model}. Trying next model...`
+                    );
+                    break;
+                }
+
+                // Non-temporary errors: skip retries for this model
                 if (!isTemporaryError(error)) {
-                    throw error;
+                    console.error(
+                        `Gemini model ${model} failed:`,
+                        error.message
+                    );
+                    break;
                 }
 
                 console.error(
-                    `${model} unavailable. Attempt ${attempt + 1}/3`
+                    `${model} temporarily unavailable. Attempt ${attempt + 1}/3`
                 );
 
                 if (attempt < 2) {
@@ -57,7 +143,21 @@ async function generateWithRetry(request) {
         }
     }
 
-    throw lastError;
+    // All Gemini models failed: try Groq
+    try {
+        return await generateWithGroq(
+            request.contents,
+            request.config?.responseSchema
+        );
+    } catch (groqError) {
+        console.error("Groq backup failed:", groqError.message);
+
+        throw new Error(
+            `All AI providers failed. Gemini: ${
+                lastError?.message || "Unknown error"
+            }. Groq: ${groqError.message}`
+        );
+    }
 }
 
 // Interview report response schema
@@ -178,7 +278,9 @@ Instructions:
     });
 
     if (!response.text) {
-        throw new Error("Gemini returned an empty interview report.");
+        throw new Error(
+            "AI provider returned an empty interview report."
+        );
     }
 
     let report;
@@ -186,7 +288,9 @@ Instructions:
     try {
         report = JSON.parse(response.text);
     } catch {
-        throw new Error("Gemini returned invalid JSON.");
+        throw new Error(
+            "AI provider returned invalid interview report JSON."
+        );
     }
 
     const requiredArrays = [
@@ -205,7 +309,9 @@ Instructions:
             (field) => !Array.isArray(report[field])
         )
     ) {
-        throw new Error("Gemini returned an incomplete interview report.");
+        throw new Error(
+            "AI provider returned an incomplete interview report."
+        );
     }
 
     if (
@@ -214,7 +320,7 @@ Instructions:
         report.preparationPlan.length === 0
     ) {
         throw new Error(
-            "Gemini returned empty report sections. Please try again."
+            "AI provider returned empty report sections. Please try again."
         );
     }
 
@@ -276,8 +382,8 @@ Requirements:
 - Highlight skills relevant to the job.
 - Use a simple professional layout.
 - Make the resume suitable for an A4 PDF.
--Give the resume of one page only and that looks real to human written and not by the ai.
--The resume should not be so lengthy, it should ideally be 1-2 pages long when converted to PDF. Focus on quality rather than quantity and make sure to include all the relevant information that can increase the candidate's chances of getting an interview call for the given job description
+- Keep the resume concise and professional.
+- Focus on relevant information that can improve interview chances.
 `;
 
     const response = await generateWithRetry({
@@ -295,7 +401,9 @@ Requirements:
     });
 
     if (!response.text) {
-        throw new Error("Gemini returned an empty resume response.");
+        throw new Error(
+            "AI provider returned an empty resume response."
+        );
     }
 
     let resumeData;
@@ -303,14 +411,18 @@ Requirements:
     try {
         resumeData = JSON.parse(response.text);
     } catch {
-        throw new Error("Gemini returned invalid resume JSON.");
+        throw new Error(
+            "AI provider returned invalid resume JSON."
+        );
     }
 
     if (
         typeof resumeData.html !== "string" ||
         !resumeData.html.trim()
     ) {
-        throw new Error("Gemini did not return valid resume HTML.");
+        throw new Error(
+            "AI provider did not return valid resume HTML."
+        );
     }
 
     return generatePdfFromHtml(resumeData.html);
