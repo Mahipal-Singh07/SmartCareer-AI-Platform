@@ -11,4 +11,4 @@ catch (err) {
 }
 }
 
-module.exports = connectToDB
+module.exports = connectToDB;
