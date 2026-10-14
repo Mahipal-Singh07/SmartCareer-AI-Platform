@@ -480,7 +480,7 @@ Instructions:
 3. Generate 8 to 10 technical interview questions.
 4. Generate 5 behavioral interview questions.
 5. Every question must contain question, intention, and answer.
-6. Identify 3 to 5 skill gaps with severity low, medium, or high.
+6. Identify the 3 to 5 skill gaps with severity low, medium, or high.
 7. Generate a 7-day preparation plan.
 8. Every preparation day must contain numeric day, focus, and tasks.
 9. Tailor the output to the supplied resume and job description.
