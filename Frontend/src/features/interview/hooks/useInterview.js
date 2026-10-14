@@ -69,12 +69,12 @@ export const useInterview = () => {
     try {
       const response = await getAllInterviewReports();
 
-      if (!response || !Array.isArray(response.reports)) {
-        throw new Error("Failed to fetch interview reports");
-      }
+      if (!Array.isArray(response?.interviewReports)) {
+  throw new Error("Failed to fetch interview reports");
+}
 
-      setReports(response.reports);
-      return response.reports;
+setReports(response.interviewReports);
+return response.interviewReports;
     } catch (err) {
       setError(
         err.response?.data?.message ||
