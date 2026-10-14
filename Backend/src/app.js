@@ -20,16 +20,16 @@ app.use(
 const authRouter = require("./routes/auth.routes")
 const interviewRouter = require("./routes/interview.routes")
 
-app.get("/", (req, res) => {
-  res.status(200).json({
-    message: "SmartCareer AI Platform backend is running!"
-  });
-});
+
 
 /* using all the routes here */
 app.use("/api/auth", authRouter)
 app.use("/api/interview", interviewRouter)
 
-
+app.get("/", (req, res) => {
+  res.status(200).json({
+    message: "SmartCareer AI Platform backend is running!"
+  });
+});
 
 module.exports = app
