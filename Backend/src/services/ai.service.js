@@ -543,6 +543,7 @@ Instructions:
 }
 
 // Convert HTML into a PDF Buffer.
+a
 async function generatePdfFromHtml(htmlContent) {
     if (
         typeof htmlContent !== "string" ||
@@ -555,15 +556,94 @@ async function generatePdfFromHtml(htmlContent) {
 
     console.time("PDF generation");
 
-   
-const browser = await puppeteer.launch({
-  executablePath:
-    process.env.PUPPETEER_EXECUTABLE_PATH ||
-    puppeteer.executablePath(),
-  headless: true,
-  args: ["--no-sandbox", "--disable-setuid-sandbox"],
-});
+    const fs = require("fs");
+    const browserPath = puppeteer.executablePath();
 
+    console.log("Puppeteer Chrome path:", browserPath);
+    console.log(
+        "Chrome file exists:",
+        fs.existsSync(browserPath)
+    );
+
+    if (!fs.existsSync(browserPath)) {
+        throw new Error(
+            `Chrome executable not found: ${browserPath}`
+        );
+    }
+
+    let browser;
+
+    try {
+        browser = await puppeteer.launch({
+            executablePath: browserPath,
+            headless: true,
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ],
+        });
+
+        const page = await browser.newPage();
+
+        page.setDefaultNavigationTimeout(15000);
+        page.setDefaultTimeout(15000);
+
+        await page.setContent(htmlContent, {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+        });
+
+        await page.emulateMediaType("print");
+
+        // Avoid waiting indefinitely for fonts.
+        await Promise.race([
+            page.evaluate(() => document.fonts?.ready),
+            wait(1500),
+        ]);
+
+        const pdfBytes = await page.pdf({
+            format: "A4",
+            printBackground: true,
+            preferCSSPageSize: true,
+            margin: {
+                top: "20mm",
+                bottom: "20mm",
+                left: "15mm",
+                right: "15mm",
+            },
+        });
+
+        const pdfBuffer = Buffer.from(pdfBytes);
+
+        console.log(
+            "Generated PDF size:",
+            pdfBuffer.length,
+            "bytes"
+        );
+
+        console.log(
+            "Generated PDF header:",
+            pdfBuffer.subarray(0, 5).toString()
+        );
+
+        if (
+            pdfBuffer.length === 0 ||
+            pdfBuffer.subarray(0, 5).toString() !== "%PDF-"
+        ) {
+            throw new Error(
+                "Puppeteer did not generate a valid PDF."
+            );
+        }
+
+        return pdfBuffer;
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
+
+        console.timeEnd("PDF generation");
+    }
+}
 
     try {
         const page = await browser.newPage();
