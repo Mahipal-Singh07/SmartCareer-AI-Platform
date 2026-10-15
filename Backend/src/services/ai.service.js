@@ -555,10 +555,15 @@ async function generatePdfFromHtml(htmlContent) {
 
     console.time("PDF generation");
 
-    const browser = await puppeteer.launch({
+   
+const browser = await puppeteer.launch({
+  executablePath:
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    puppeteer.executablePath(),
   headless: true,
   args: ["--no-sandbox", "--disable-setuid-sandbox"],
 });
+
 
     try {
         const page = await browser.newPage();
