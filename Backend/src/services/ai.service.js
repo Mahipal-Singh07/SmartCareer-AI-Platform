@@ -1,6 +1,8 @@
+
 const { GoogleGenAI, Type } = require("@google/genai");
 const Groq = require("groq-sdk");
 const puppeteer = require("puppeteer");
+const fs = require("fs");
 
 const ai = process.env.GOOGLE_GENAI_API_KEY
     ? new GoogleGenAI({
@@ -19,8 +21,7 @@ const MODELS = [
     "gemini-3.5-flash-lite",
 ];
 
-const wait = (ms) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function errorMessage(error) {
     return String(error?.message || error || "Unknown error");
@@ -123,7 +124,6 @@ async function generateWithGroq(prompt, responseSchema) {
     try {
         const response = await groq.chat.completions.create({
             model: "openai/gpt-oss-20b",
-
             messages: [
                 {
                     role: "system",
@@ -140,16 +140,13 @@ ${schemaInstructions(responseSchema)}
                     content: prompt,
                 },
             ],
-
             response_format: {
                 type: "json_object",
             },
-
             max_tokens: 6000,
         });
 
-        const content =
-            response.choices?.[0]?.message?.content;
+        const content = response.choices?.[0]?.message?.content;
 
         if (!content) {
             throw new Error("Groq returned an empty response");
@@ -159,9 +156,7 @@ ${schemaInstructions(responseSchema)}
 
         console.log("Groq response generated successfully.");
 
-        return {
-            text: content,
-        };
+        return { text: content };
     } finally {
         console.timeEnd("Groq request");
     }
@@ -211,15 +206,12 @@ async function generateWithRetry(request) {
                 });
 
                 if (!response?.text) {
-                    throw new Error(
-                        `${model} returned an empty response`
-                    );
+                    throw new Error(`${model} returned an empty response`);
                 }
 
                 return response;
             } catch (error) {
                 lastError = error;
-
                 console.error(
                     `Gemini fallback failed (${model}):`,
                     error.message
@@ -238,7 +230,6 @@ async function generateWithRetry(request) {
 }
 
 // Resume PDFs: Gemini first, Groq fallback.
-// This function is defined outside generateWithRetry().
 async function generateResumeWithGeminiFirst(request) {
     let lastError;
 
@@ -256,14 +247,10 @@ async function generateResumeWithGeminiFirst(request) {
                 });
 
                 if (!response?.text) {
-                    throw new Error(
-                        "Gemini returned an empty response"
-                    );
+                    throw new Error("Gemini returned an empty response");
                 }
 
-                console.log(
-                    "Resume content generated using Gemini."
-                );
+                console.log("Resume content generated using Gemini.");
 
                 return response;
             } catch (error) {
@@ -274,15 +261,12 @@ async function generateResumeWithGeminiFirst(request) {
                     error.message
                 );
 
-                // Don't retry the same model for quota or invalid-request errors.
                 if (
                     isQuotaError(error) ||
                     isModelOrRequestError(error)
                 ) {
                     break;
                 }
-
-                // Continue to the next model for other failures.
             } finally {
                 console.timeEnd(timer);
             }
@@ -293,7 +277,6 @@ async function generateResumeWithGeminiFirst(request) {
         );
     }
 
-    // Use Groq if Gemini fails.
     try {
         console.log("Resume: falling back to Groq");
 
@@ -313,124 +296,63 @@ async function generateResumeWithGeminiFirst(request) {
 // Interview report response schema.
 const interviewReportSchema = {
     type: Type.OBJECT,
-
     properties: {
-        title: {
-            type: Type.STRING,
-        },
-
-        matchScore: {
-            type: Type.NUMBER,
-        },
-
+        title: { type: Type.STRING },
+        matchScore: { type: Type.NUMBER },
         technicalQuestions: {
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
-
                 properties: {
-                    question: {
-                        type: Type.STRING,
-                    },
-
-                    intention: {
-                        type: Type.STRING,
-                    },
-
-                    answer: {
-                        type: Type.STRING,
-                    },
+                    question: { type: Type.STRING },
+                    intention: { type: Type.STRING },
+                    answer: { type: Type.STRING },
                 },
-
-                required: [
-                    "question",
-                    "intention",
-                    "answer",
-                ],
+                required: ["question", "intention", "answer"],
             },
         },
-
         behavioralQuestions: {
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
-
                 properties: {
-                    question: {
-                        type: Type.STRING,
-                    },
-
-                    intention: {
-                        type: Type.STRING,
-                    },
-
-                    answer: {
-                        type: Type.STRING,
-                    },
+                    question: { type: Type.STRING },
+                    intention: { type: Type.STRING },
+                    answer: { type: Type.STRING },
                 },
-
-                required: [
-                    "question",
-                    "intention",
-                    "answer",
-                ],
+                required: ["question", "intention", "answer"],
             },
         },
-
         skillGaps: {
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
-
                 properties: {
-                    skill: {
-                        type: Type.STRING,
-                    },
-
+                    skill: { type: Type.STRING },
                     severity: {
                         type: Type.STRING,
                         enum: ["low", "medium", "high"],
                     },
                 },
-
-                required: [
-                    "skill",
-                    "severity",
-                ],
+                required: ["skill", "severity"],
             },
         },
-
         preparationPlan: {
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
-
                 properties: {
-                    day: {
-                        type: Type.NUMBER,
-                    },
-
-                    focus: {
-                        type: Type.STRING,
-                    },
-
+                    day: { type: Type.NUMBER },
+                    focus: { type: Type.STRING },
                     tasks: {
                         type: Type.ARRAY,
-                        items: {
-                            type: Type.STRING,
-                        },
+                        items: { type: Type.STRING },
                     },
                 },
-
-                required: [
-                    "day",
-                    "focus",
-                    "tasks",
-                ],
+                required: ["day", "focus", "tasks"],
             },
         },
     },
-
     required: [
         "title",
         "matchScore",
@@ -480,7 +402,7 @@ Instructions:
 3. Generate 8 to 10 technical interview questions.
 4. Generate 5 behavioral interview questions.
 5. Every question must contain question, intention, and answer.
-6. Identify the 3 to 5 skill gaps with severity low, medium, or high.
+6. Identify 3 to 5 skill gaps with severity low, medium, or high.
 7. Generate a 7-day preparation plan.
 8. Every preparation day must contain numeric day, focus, and tasks.
 9. Tailor the output to the supplied resume and job description.
@@ -492,7 +414,6 @@ Instructions:
 
     const response = await generateWithRetry({
         contents: prompt,
-
         config: {
             responseMimeType: "application/json",
             responseSchema: interviewReportSchema,
@@ -517,9 +438,7 @@ Instructions:
         !Number.isFinite(report.matchScore) ||
         report.matchScore < 0 ||
         report.matchScore > 100 ||
-        requiredArrays.some(
-            (field) => !Array.isArray(report[field])
-        )
+        requiredArrays.some((field) => !Array.isArray(report[field]))
     ) {
         throw new Error(
             "AI provider returned an incomplete interview report."
@@ -543,7 +462,6 @@ Instructions:
 }
 
 // Convert HTML into a PDF Buffer.
-a
 async function generatePdfFromHtml(htmlContent) {
     if (
         typeof htmlContent !== "string" ||
@@ -556,7 +474,6 @@ async function generatePdfFromHtml(htmlContent) {
 
     console.time("PDF generation");
 
-    const fs = require("fs");
     const browserPath = puppeteer.executablePath();
 
     console.log("Puppeteer Chrome path:", browserPath);
@@ -595,7 +512,6 @@ async function generatePdfFromHtml(htmlContent) {
 
         await page.emulateMediaType("print");
 
-        // Avoid waiting indefinitely for fonts.
         await Promise.race([
             page.evaluate(() => document.fonts?.ready),
             wait(1500),
@@ -645,68 +561,6 @@ async function generatePdfFromHtml(htmlContent) {
     }
 }
 
-    try {
-        const page = await browser.newPage();
-
-        page.setDefaultNavigationTimeout(15000);
-        page.setDefaultTimeout(15000);
-
-        await page.setContent(htmlContent, {
-            waitUntil: "domcontentloaded",
-            timeout: 15000,
-        });
-
-        await page.emulateMediaType("print");
-
-        // Avoid waiting indefinitely for fonts.
-        await Promise.race([
-            page.evaluate(() => document.fonts?.ready),
-            wait(1500),
-        ]);
-
-        const pdfBytes = await page.pdf({
-            format: "A4",
-            printBackground: true,
-            preferCSSPageSize: true,
-
-            margin: {
-                top: "20mm",
-                bottom: "20mm",
-                left: "15mm",
-                right: "15mm",
-            },
-        });
-
-        // IMPORTANT: Return a Node.js Buffer.
-        const pdfBuffer = Buffer.from(pdfBytes);
-
-        console.log(
-            "Generated PDF size:",
-            pdfBuffer.length,
-            "bytes"
-        );
-
-        console.log(
-            "Generated PDF header:",
-            pdfBuffer.subarray(0, 5).toString()
-        );
-
-        if (
-            pdfBuffer.length === 0 ||
-            pdfBuffer.subarray(0, 5).toString() !== "%PDF-"
-        ) {
-            throw new Error(
-                "Puppeteer did not generate a valid PDF."
-            );
-        }
-
-        return pdfBuffer;
-    } finally {
-        await browser.close();
-        console.timeEnd("PDF generation");
-    }
-}
-
 // Generate a tailored resume PDF.
 async function generateResumePdf({
     resume,
@@ -741,19 +595,13 @@ Requirements:
 
     const response = await generateResumeWithGeminiFirst({
         contents: prompt,
-
         config: {
             responseMimeType: "application/json",
-
             responseSchema: {
                 type: Type.OBJECT,
-
                 properties: {
-                    html: {
-                        type: Type.STRING,
-                    },
+                    html: { type: Type.STRING },
                 },
-
                 required: ["html"],
             },
         },
